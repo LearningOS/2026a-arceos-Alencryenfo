@@ -8,6 +8,9 @@ use axtask::current;
 use axtask::TaskExtRef;
 use axhal::paging::MappingFlags;
 use arceos_posix_api as api;
+use arceos_posix_api::get_file_like;
+use memory_addr::{VirtAddr, VirtAddrRange};
+extern crate alloc;
 
 const SYS_IOCTL: usize = 29;
 const SYS_OPENAT: usize = 56;
@@ -131,7 +134,6 @@ fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
     ret
 }
 
-#[allow(unused_variables)]
 fn sys_mmap(
     addr: *mut usize,
     length: usize,
@@ -140,7 +142,48 @@ fn sys_mmap(
     fd: i32,
     _offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+    if length == 0 {
+        return -LinuxError::EINVAL.code() as isize;
+    }
+    let len = (length + 4095) & !4095;
+    let user = current();
+    let aspace = user.task_ext().aspace.clone();
+    let mut aspace = aspace.lock();
+
+    let vaddr = if addr.is_null() {
+        let hint = VirtAddr::from(0x1000_0000usize);
+        let limit = VirtAddrRange::from_start_size(aspace.base(), aspace.size());
+        match aspace.find_free_area(hint, len, limit) {
+            Some(v) => v,
+            None => return -LinuxError::ENOMEM.code() as isize,
+        }
+    } else {
+        VirtAddr::from(addr as usize)
+    };
+
+    let mflags = MmapProt::from_bits_truncate(prot).into();
+    if aspace.map_alloc(vaddr, len, mflags, true).is_err() {
+        return -LinuxError::ENOMEM.code() as isize;
+    }
+
+    if flags & MmapFlags::MAP_ANONYMOUS.bits() == 0 && fd >= 0 {
+        let file = match get_file_like(fd) {
+            Ok(f) => f,
+            Err(e) => return -e.code() as isize,
+        };
+        let mut buf = alloc::vec![0u8; len];
+        let mut read = 0;
+        while read < len {
+            match file.read(&mut buf[read..]) {
+                Ok(0) => break,
+                Ok(n) => read += n,
+                Err(_) => break,
+            }
+        }
+        let _ = aspace.write(vaddr, &buf[..read]);
+    }
+
+    vaddr.as_usize() as isize
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {

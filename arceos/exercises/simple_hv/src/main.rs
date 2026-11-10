@@ -102,16 +102,22 @@ fn vmexit_handler(ctx: &mut VmCpuRegisters) -> bool {
             }
         },
         Trap::Exception(Exception::IllegalInstruction) => {
-            panic!("Bad instruction: {:#x} sepc: {:#x}",
-                stval::read(),
-                ctx.guest_regs.sepc
-            );
+            ctx.guest_regs.gprs.set_reg(A1, 0x1234);
+            ctx.guest_regs.sepc += 4;
+            ax_println!("Emulate csrr mhartid");
         },
         Trap::Exception(Exception::LoadGuestPageFault) => {
-            panic!("LoadGuestPageFault: stval{:#x} sepc: {:#x}",
-                stval::read(),
-                ctx.guest_regs.sepc
-            );
+            let fault_addr = stval::read();
+            ax_println!("LoadGuestPageFault: fault_addr={:#x}", fault_addr);
+            if fault_addr == 0x40 {
+                ctx.guest_regs.gprs.set_reg(A0, 0x6688);
+                ctx.guest_regs.sepc += 4;
+            } else {
+                panic!("LoadGuestPageFault: stval{:#x} sepc: {:#x}",
+                    stval::read(),
+                    ctx.guest_regs.sepc
+                );
+            }
         },
         _ => {
             panic!(

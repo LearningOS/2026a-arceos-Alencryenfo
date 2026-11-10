@@ -3,7 +3,7 @@
 //! TODO: it doesn't work very well if the mount points have containment relationships.
 
 use alloc::{string::String, sync::Arc, vec::Vec};
-use axerrno::{ax_err, AxError, AxResult};
+use axerrno::{ax_err, ax_err_type, AxError, AxResult};
 use axfs_vfs::{VfsNodeAttr, VfsNodeOps, VfsNodeRef, VfsNodeType, VfsOps, VfsResult};
 use axsync::Mutex;
 use lazyinit::LazyInit;
@@ -137,7 +137,15 @@ impl VfsNodeOps for RootDirectory {
             if rest_path.is_empty() {
                 ax_err!(PermissionDenied) // cannot rename mount points
             } else {
-                fs.root_dir().rename(rest_path, dst_path)
+                let dst = self.lookup_mounted_fs(dst_path, |dst_fs, dst_rest| {
+                    if !Arc::ptr_eq(&fs, &dst_fs) {
+                        return Err(ax_err_type!(PermissionDenied));
+                    }
+                    fs.root_dir()
+                        .rename(rest_path, dst_rest)
+                        .map_err(|_| ax_err_type!(InvalidInput))
+                })?;
+                Ok(dst)
             }
         })
     }
